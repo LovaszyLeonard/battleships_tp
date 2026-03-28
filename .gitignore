@@ -1,0 +1,16 @@
+# Fisiere obiect si executabile
+*.o
+*.out
+*.exe
+
+# Directoare de compilare (daca vei folosi pe viitor)
+bin/
+build/
+
+# Fisiere generate de sistemele de operare (Mac/Windows)
+.DS_Store
+Thumbs.db
+
+# Fisiere de configurare ale editoarelor (VS Code, CLion etc.)
+.vscode/
+.idea/
