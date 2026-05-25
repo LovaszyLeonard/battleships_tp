@@ -1,0 +1,61 @@
+1. Arhitectura de Rețea și Sockets POSIX (Nivelul de Transport)
+Sistemul implementează o topologie de comunicație distribuită, bazată pe modelul Client-Server simetric (în faza de execuție), folosind stiva de protocoale TCP/IP. Pentru manipularea conexiunilor de rețea, aplicația interacționează direct cu API-ul sistemului de operare prin intermediul standardului POSIX Sockets.
+
+Alegerea protocolului TCP (Transmission Control Protocol) peste SOCK_STREAM este imperativă pentru a garanta livrarea, ordonarea secvențială și integritatea datelor (fără corupere sau pierdere de pachete).
+
+Secvența operațională de conectare se desfășoară astfel:
+
+Inițializarea Serverului (Host):
+
+Apelul de sistem socket(AF_INET, SOCK_STREAM, 0) alocă un file descriptor în spațiul nucleului (kernel space) pentru manipularea rețelei în familia de adrese IPv4.
+
+Apelul bind() asociază acest file descriptor unui port hardware specific (8080) pe interfața INADDR_ANY, delegând nucleului operarea pachetelor de intrare direcționate către acest port.
+
+listen() dimensionează coada de așteptare pentru backlog-ul conexiunilor TCP, trecând socket-ul în mod pasiv de ascultare.
+
+Firul de execuție principal este blocat prin apelul accept(). Nucleul OS suspendă procesul până când un client inițiază un "3-way handshake". La finalizarea handshake-ului, accept() returnează un nou file descriptor dedicat exclusiv sesiunii de transfer de date cu acel client, eliberând portul de ascultare original.
+
+Inițializarea Clientului:
+
+Aplicația client folosește inet_pton() pentru a serializa șirul de caractere al adresei IP într-o structură binară capabilă de transmisie în rețea.
+
+Apelul connect() instruiește stiva TCP locală să trimită un pachet de tip SYN (Synchronize) către adresa și portul destinație, inițiind faza de negociere a conexiunii.
+
+2. Protocolul de Aplicație și Serializarea Datelor
+Pentru a interpreta fluxul de biți transmis prin TCP (care operează ca un flux continuu, nu prin mesaje discrete), aplicația definește un protocol binar fixat la nivelul OSI 7 (Application Layer). Protocolul este abstractizat prin structura de date Packet:
+
+C
+typedef struct {
+    int type;
+    int x;
+    int y;
+} Packet;
+Pe arhitecturile standard de procesare (cu reprezentare de 32 de biți pentru tipul int), această structură ocupă o zonă contiguă de 12 octeți în memorie (fără spații goale de padding, datorită utilizării unor tipuri de date omogene).
+
+Când sistemul apelează send(), procesul ordonă nucleului să transfere blocul de 12 octeți direct din memoria stivei (stack) locale în buffer-ul de emisie al plăcii de rețea. La destinație, recv() extrage acest flux din buffer-ul de recepție al nucleului și populează câmpurile memoriei locale. Evaluarea câmpului type (din enum-ul MessageType) dictează ramificarea mașinii de stări în cod.
+
+3. Sincronizarea Execuției prin I/O Blocant (Blocking I/O)
+Deși aplicația nu utilizează fire de execuție multiple (multithreading) sau multiplexare asincronă (precum epoll sau select), ea atinge o concurență și o sincronizare perfecte prin exploatarea funcțiilor I/O cu comportament blocant ale sistemului de operare.
+
+Motorul jocului funcționează ca o Mașină cu Stări Finite (FSM), unde tranziția între starea de atac și starea de apărare este controlată exclusiv de variabila de tip token is_my_turn.
+
+Blocajul Hardware (Input): Când este rândul unui proces (is_my_turn == 1), acesta execută scanf(). Nucleul OS pune procesul în starea sleep, eliberând resursele unității centrale de procesare (CPU). Procesul va fi trezit de nucleu printr-o întrerupere hardware (interrupt) abia atunci când controlerul tastaturii trimite fluxul de date terminat cu un delimitator de linie (\n).
+
+Blocajul de Rețea (Network Wait): În același timp, celălalt nod al rețelei (is_my_turn == 0) execută recv(). Sistemul de operare suspendă și acest proces până când coada buffer-ului de recepție acumulează pachete TCP valide. Sosirea datelor de la adversar declanșează o întrerupere de rețea, iar procesul este reluat exact din punctul în care a fost pus pe pauză.
+
+Acest comutator de context (context switch) natural la nivelul kernel-ului garantează siguranța succesiunii turelor.
+
+4. Randarea Interfeței Grafice în Terminal (TUI) și Memoria Locală
+Afișarea matricei de joc nu se bazează pe o bibliotecă externă, ci manipulează direct semnalele emulatorului de terminal prin in-band signaling (secvențe de control ANSI).
+
+Starea globală a meciului este stocată în două matrici bidimensionale alocate static pe stiva funcției (my_board și radar_board). Modificarea stărilor logice (ex: trecerea de la starea fizică SHIP la starea HIT) implică o simplă reatribuire de valoare între indici.
+
+Pentru redarea acestor date pe un ecran static (fără efectul de scrolling output), aplicația realizează următorii pași la fiecare frame:
+
+Cursor Home (\033[H): Trimite o comandă fizică procesului terminalului de a muta cursorul activ la coordonatele X=0, Y=0.
+
+Erase Display (\033[J): Șterge toate caracterele aflate în bufferul ecranului (framebuffer) și curăță interfața.
+
+Redesenare: Bucla de traversare a matricilor printează starea curentă din memorie aplicând coduri de modificare a culorii (ex: \033[31m pentru roșu) și resetând imediat starea formatării cu \033[0m.
+
+Acest algoritm se execută în câteva microsecunde (timp I/O), obținându-se astfel o tranziție vizuală continuă a cadrelor direct în modulul text-mode al sistemului Linux/Unix.

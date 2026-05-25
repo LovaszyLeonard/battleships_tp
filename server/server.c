@@ -15,15 +15,13 @@ int main() {
     int addrlen = sizeof(address);
     Packet p_in, p_out;
 
-    // --- INITIALIZARE JOC ---
     int my_board[BOARD_SIZE][BOARD_SIZE];
-    init_board(my_board);
+    int radar_board[BOARD_SIZE][BOARD_SIZE];
     
-    // nava de test (dimensiune 3, orizontala, la randul 0, coloana 0)
-    place_ship(my_board, 0, 0, 3, 1); 
+    init_board(my_board);
+    init_board(radar_board);
 
-    // --- RETELISTICA (Setup) ---
-    if ((server_fd = socket(AF_INET, SOCK_STREAM, 0)) == 0) {
+    if ((server_fd = socket(AF_INET, SOCK_STREAM, 0)) < 0) {
         perror("Socket failed");
         exit(EXIT_FAILURE);
     }
@@ -43,88 +41,115 @@ int main() {
         exit(EXIT_FAILURE);
     }
 
-    printf("Server listening on port %d...\n", PORT);
+    printf("Listening on port %d...\n", PORT);
 
     if ((client_sock = accept(server_fd, (struct sockaddr *)&address, (socklen_t*)&addrlen)) < 0) {
         perror("Accept failed");
         exit(EXIT_FAILURE);
     }
     
-    printf("Client connected. Game starting!\n\n");
-
-    // Trimitem confirmarea
     p_out.type = MSG_WELCOME;
     send(client_sock, &p_out, sizeof(Packet), 0);
 
-    // --- GAME LOOP ---
+    printf("Connected! Setting up fleet...\n");
+    sleep(1);
+    setup_fleet(my_board);
+
+    p_out.type = MSG_READY;
+    send(client_sock, &p_out, sizeof(Packet), 0);
+    
+    printf("Waiting for opponent to be ready...\n");
+    
+    do {
+        recv(client_sock, &p_in, sizeof(Packet), 0);
+    } while (p_in.type != MSG_READY);
+
+    printf("Both players ready! Game starts in 2 seconds...\n");
+    sleep(2);
+
     int game_running = 1;
-    int is_my_turn = 1; // Serverul (Player 1) muta primul
+    int is_my_turn = 1;
 
     while (game_running) {
-        if (is_my_turn) {
-            // RUNDA SERVERULUI
-            int r, c;
-            printf("Your turn. Enter Row and Col (0-9): ");
-            scanf("%d %d", &r, &c);
+        draw_ui(my_board, radar_board);
 
-            // Trimitem lovitura
+        if (is_my_turn) {
+            int r = -1, c = -1;
+            
+            while (1) {
+                printf("Your turn. Row Col: ");
+                scanf("%d %d", &r, &c);
+                
+                int ch;
+                while ((ch = getchar()) != '\n' && ch != EOF);
+                if (ch == EOF) exit(0); 
+                
+                if (r >= 0 && r < BOARD_SIZE && c >= 0 && c < BOARD_SIZE) {
+                    break;
+                }
+                printf("Invalid! Use 0-9.\n");
+            }
+
             p_out.type = MSG_SHOOT;
             p_out.x = r;
             p_out.y = c;
             send(client_sock, &p_out, sizeof(Packet), 0);
 
-            // Asteptam rezultatul
             recv(client_sock, &p_in, sizeof(Packet), 0);
             
-            if (p_in.type == MSG_RESULT_HIT) {
-                printf("Result: HIT!\n\n");
+            if (p_in.type == MSG_RESULT_HIT || p_in.type == MSG_GAME_OVER) {
+                radar_board[r][c] = HIT;
+                draw_ui(my_board, radar_board);
+                printf("Result: HIT!\n");
             } else if (p_in.type == MSG_RESULT_MISS) {
-                printf("Result: MISS!\n\n");
-            } else if (p_in.type == MSG_GAME_OVER) {
-                printf("Result: HIT! ALL SHIPS DESTROYED! YOU WIN!\n");
+                radar_board[r][c] = MISS;
+                draw_ui(my_board, radar_board);
+                printf("Result: MISS!\n");
+            }
+
+            if (p_in.type == MSG_GAME_OVER) {
+                printf("ENEMY FLEET DESTROYED! YOU WIN!\n");
                 game_running = 0;
             }
             
+            fflush(stdout);
+            sleep(2);
             is_my_turn = 0;
         } else {
-            // RUNDA CLIENTULUI
             printf("Waiting for opponent...\n");
             
             recv(client_sock, &p_in, sizeof(Packet), 0);
             
             if (p_in.type == MSG_SHOOT) {
-                printf("Opponent shot at Row: %d, Col: %d\n", p_in.x, p_in.y);
-                
-                // Procesam pe tabla noastra
                 int result = process_shot(my_board, p_in.x, p_in.y);
                 p_out.type = result;
                 p_out.x = p_in.x;
                 p_out.y = p_in.y;
 
-                // Verificam daca am pierdut
                 if (check_victory(my_board)) {
                     p_out.type = MSG_GAME_OVER;
                     game_running = 0;
                 }
 
-                // Trimitem rezultatul inapoi
                 send(client_sock, &p_out, sizeof(Packet), 0);
 
+                draw_ui(my_board, radar_board);
+                printf("Opponent fired at: %d %d\n", p_in.x, p_in.y);
+                
                 if (game_running == 0) {
-                    printf("ALL YOUR SHIPS DESTROYED. YOU LOSE!\n");
-                } else {
-                    printf("Board updated.\n\n");
+                    printf("YOUR FLEET DESTROYED! YOU LOSE!\n");
                 }
+                
+                fflush(stdout);
+                sleep(2);
             }
-            
-            is_my_turn = 1; // Ne vine randul
+            is_my_turn = 1;
         }
     }
 
-    // Curatenie
     close(client_sock);
     close(server_fd);
-    printf("Game over. Server shutting down.\n");
+    printf("Game Over.\n");
 
     return 0;
 }

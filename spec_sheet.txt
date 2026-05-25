@@ -1,0 +1,111 @@
+1. Descrierea Generală a Sistemului
+Battleships TUI este o aplicație software de tip joc de strategie navală în doi jucători, care operează în arhitectură rețelistică Client-Server. Proiectul este scris integral în limbajul C (Standard C99/C11) și utilizează socket-uri POSIX pentru comunicare TCP/IP. Interfața grafică este implementată direct în terminal (TUI - Terminal User Interface) utilizând secvențe de evadare ANSI (ANSI escape codes) pentru manipularea culorilor și a cursorului.
+
+2. Arhitectura Sistemului
+Proiectul folosește un model descentralizat parțial, tip Peer-to-Peer simetric, mediat de un Host (Server).
+
+Serverul (Jucătorul 1): Inițiază un socket de ascultare (listen) pe un port specificat și așteaptă o singură conexiune de tip client. Serverul are avantajul primei mutări.
+
+Clientul (Jucătorul 2): Inițiază o cerere de conectare către adresa IP și portul serverului.
+
+Sincronizare: Ambele instanțe rulează o mașină a stărilor (State Machine) identică pentru Game Loop, alternând stările de Attack și Wait pe baza unui token logic (is_my_turn).
+
+3. Cerințe de Sistem (Prerequisites)
+Sistem de Operare: Linux, macOS, sau orice alt mediu compatibil POSIX.
+
+Compilator: GCC (GNU Compiler Collection).
+
+Build System: GNU Make.
+
+Dependințe Externe: Zero dependințe externe (folosește exclusiv bibliotecile standard: <stdio.h>, <stdlib.h>, <unistd.h>, <arpa/inet.h>, <sys/socket.h>).
+
+4. Structura Fișierelor
+Proiectul este modularizat pentru a separa logica de rețea de logica jocului:
+
+server/server.c - Gestionează ciclul de viață al socket-ului de server și fluxul jucătorului 1.
+
+client/client.c - Gestionează conexiunea outbound și fluxul jucătorului 2.
+
+common/protocol.h - Definește structurile de date partajate în rețea.
+
+common/game_logic.h - Interfața motorului de joc.
+
+common/game_logic.c - Implementarea motorului de randare TUI, plasarea navelor și evaluarea daunelor.
+
+Makefile - Automatizarea procesului de compilare.
+
+5. Protocolul de Comunicație (Network Protocol)
+Comunicarea se realizează prin protocolul TCP, asigurând livrarea garantată a pachetelor.
+Toate datele trimise în rețea sunt încapsulate în structura Packet (dimensiune standard de 12 bytes pe arhitecturi pe 32/64-bit).
+
+5.1. Structura Pachetului de Date
+C
+typedef struct {
+    int type; // Tipul mesajului (enum MessageType)
+    int x;    // Coordonata pe axa X (Rând)
+    int y;    // Coordonata pe axa Y (Coloană)
+} Packet;
+5.2. Tipuri de Mesaje (Enum MessageType)
+MSG_WELCOME (1) - Trimis de server pentru a confirma conectarea clientului.
+
+MSG_READY (2) - Trimis de ambele părți pentru a semnala finalizarea fazei de Setup a flotei.
+
+MSG_SHOOT (3) - Conține coordonatele unui atac (x, y).
+
+MSG_RESULT_HIT (4) - Răspuns: Proiectilul a lovit o navă.
+
+MSG_RESULT_MISS (5) - Răspuns: Proiectilul a lovit apa.
+
+MSG_GAME_OVER (6) - Răspuns: Flota apărătorului a fost complet distrusă. Inițiază închiderea programului.
+
+6. Mecanica și Logica de Joc
+Jocul se desfășoară pe o grilă bidimensională (Matrice) de 10x10. Fiecare jucător gestionează două matrici locale:
+
+my_board: Stochează pozițiile navelor proprii și daunele primite.
+
+radar_board: Stochează istoricul atacurilor efectuate (Hit/Miss) pentru ghidare vizuală.
+
+6.1. Stările Celulelor
+WATER (0) - Zonă neexplorată/liberă.
+
+SHIP (1) - Segment de navă intact.
+
+HIT (2) - Segment de navă distrus.
+
+MISS (3) - Proiectil căzut în apă.
+
+6.2. Faza de Pregătire (Fleet Setup)
+Flota constă din 2 nave (dimensiuni: 2 și 3).
+
+Jucătorul introduce coordonatele de plasare: [Rând] [Coloană] [Orientare].
+
+Orientare: 1 (Orizontal - crește pe axa coloanelor), 0 (Vertical - crește pe axa rândurilor).
+
+Reguli de validare: O navă nu poate fi plasată în afara indexului 0-9 și nu se poate suprapune peste o navă deja existentă.
+
+6.3. Condiția de Victorie
+La fiecare foc validat ca HIT, apărătorul scanează matricea my_board. Dacă nu mai există nicio celulă marcată cu SHIP (1), returnează pachetul MSG_GAME_OVER, stabilind atacatorul ca fiind câștigător.
+
+7. Interfața Grafică (TUI)
+Interfața este actualizată prin ștergerea completă a buffer-ului terminalului (\033[H\033[J) și redesenarea acestuia din memorie, asigurând un aspect static de aplicație (fără scrolling vertical).
+
+Paleta de culori ANSI:
+
+Albastru (\033[34m): Apa (~)
+
+Verde (\033[32m): Nava proprie intactă (S)
+
+Roșu (\033[31m): Lovitură reușită (X)
+
+Alb/Gri (\033[37m): Lovitură ratată (O)
+
+8. Securitate și Validarea Datelor (Error Handling)
+Sistemul este protejat împotriva comportamentelor neașteptate prin mecanisme stricte de validare (Sanitization):
+
+Protecție Out-of-Bounds: Orice input pentru coordonate < 0 sau > 9 este respins instantaneu, prevenind erorile de tip Segmentation Fault.
+
+Protecție Input Mismatch: În cazul introducerii de tipuri de date greșite (ex: text în loc de numere la scanf), programul previne buclele infinite (infinite loop) prin golirea forțată a buffer-ului stdin (while ((ch = getchar()) != '\n' && ch != EOF)).
+
+Protecție la Închidere Forțată: Dacă un jucător emite semnalul de terminare (Ctrl+D / EOF), programul recunoaște semnalul și oprește execuția controlat.
+
+Protecție Rețea: Deconectările subite sunt anticipate; funcția recv() este evaluată, iar dacă conexiunea se rupe (recv <= 0), jocul se termină grațios în loc să proceseze pachete corupte.
